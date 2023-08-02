@@ -11,6 +11,11 @@ from scipy.interpolate import interp1d
 from numba import njit
 from . import utils,robust,mmm
 
+# -what if I use the Horne+ (March 1989) extraction method, basically curves "rows" along
+#  the trace?
+# -maybe I could use Lanczos interpolation to resample on "rectify" the spectrum
+# -would it be possible to look for any spectral "slants" using night sky lines
+#   and removing them in the rectification?
 
 @njit
 def gvals(x,y):

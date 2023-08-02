@@ -1,6 +1,19 @@
 import numpy as np
 
 
+# can we use an astrometry.net-like algorithm to automatically figure out wavelength
+#   identification and wavelength solution?
+#  -instead of basically using "asterisms" what if we use patterns of lines and maybe
+#   even patterns in flux?
+#  -since an arc lamp can have multiple elements (e.g., HeNeAr), the patterns wouldn't
+#   need to include "all" lines in a "group" of lines.
+#  -the problem is that the "space" is "curves", i.e. if the group of 3-4 lines covers
+#   a decent number of pixels, then you might not be able to assume that the wavelength
+#   solution is linear.
+#  -Dustin used 3/4 stars and measured the angles between the stars, he looked for unique
+#   sets of angles, he did searches in healpix
+
+
 def identify(data,linelist):
     """
     Identify emission lines in an arc spectrum in a linelist using
