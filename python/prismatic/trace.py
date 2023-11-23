@@ -9,7 +9,127 @@ from astropy.io import fits
 from scipy import ndimage
 from scipy.interpolate import interp1d
 from numba import njit
-from . import utils,robust,mmm
+from dlnpyutils import utils as dln,robust,mmm
+#from . import utils,robust,mmm
+
+class Trace():
+
+    def __init__(self):
+        self._data = None
+
+    def __call__(self,x=None):
+        """ Return the trace path."""
+        if self._data is None:
+            raise ValueError('No trace data yet')
+        if x is None:
+            x = np.arange(self._data['xmin'],self._data['xmax'])
+        # Get the curve
+        y = np.polyval(self._data['tcoef'],x)
+        out = np.zeros(len(x),dtype=np.dtype([('x',float),('y',float)]))
+        out['x'] = x
+        out['y'] = y
+        return out     
+
+
+    
+    def __len__(self):
+        if self._data is None:
+            return 0
+        else:
+            return 1
+    
+    def __repr__(self):
+        prefix = self.__class__.__name__ + '('
+        if self.hasdata:
+            body = 'X=[{:.1f},{:.1f}]'.format(self.xmin,self.xmax)
+            body += ',Y=[{:.1f},{:.1f}]'.format(self.ymin,self.ymax)
+        else:
+            body = ''
+        out = ''.join([prefix, body, ')']) +'\n'
+        return out
+
+    def __array__(self):
+        """ Return the main data array."""
+        return self.data
+
+    @property
+    def hasdata(self):
+        if self._data is None:
+            return False
+        else:
+            return True
+    
+    @property
+    def data(self):
+        if self.hasdata==False:
+            return None
+        return self()['y']
+
+    @property
+    def pars(self):
+        if self.hasdata==False:
+            return None
+        return self._data['tcoef']
+    
+    @property
+    def xmin(self):
+        if self.hasdata==False:
+            return None
+        return self._data['xmin']
+
+    @property
+    def xmax(self):
+        if self.hasdata==False:
+            return None
+        return self._data['xmax']    
+
+    @property
+    def ymin(self):
+        if self.hasdata==False:
+            return None
+        return np.min(self()['y'])
+
+    @property
+    def ymax(self):
+        if self.hasdata==False:
+            return None
+        return np.max(self()['y'])        
+    
+    @property
+    def sigma(self):
+        if self.hasdata==False:
+            return None
+        return np.nanmedian(self._data['gysigma'])
+    
+    def fit(self,image,initpos=None):
+        """ Fit a trace to data."""
+        if initpos is not None:
+            if len(initpos)!=2:
+                raise ValueError("Initial guess position must have 2 elements (X,Y)")
+        # Find tracing in the image
+        trlist = findtrace(image)
+        # Find the traces closest to the initial guess position
+        medheight = np.zeros(len(trlist),float)
+        dist = np.zeros(len(trlist),float)+999999.
+        for i,tr in enumerate(trlist):
+            medheight[i] = np.nanmedian(tr['heights'])
+            if initpos is not None:
+                if tr['xmin'] <= initpos[0] and tr['xmax'] >= initpos[0]:
+                    yval = np.polyval(tr['tcoef'],initpos[0])
+                    dist[i] = np.abs(yval-initpos[1])
+        # Using initial position
+        if initpos is not None:
+            bestind = np.argmin(dist)
+        else:
+            # use brightest trace, based on height
+            bestind = np.argmax(medheight)
+        self._data = trlist[bestind]
+    
+    def dispersionaxis(self):
+        """ Determine the dispersion axis."""
+        pass
+        # Determine dispersion axis
+        #  the axis with no ambiguities/degeneracies, single-valued
 
 
 @njit
@@ -74,7 +194,7 @@ def backvals(backpix):
     """ Estimate the median and sigma of background pixels."""
     vals = backpix.copy()
     medback = np.nanmedian(vals)
-    sigback = utils.mad(vals)
+    sigback = dln.mad(vals)
     lastmedback = 1e30
     lastsigback = 1e30
     done = False
@@ -83,7 +203,7 @@ def backvals(backpix):
         gdback, = np.where(vals < (medback+3*sigback))
         vals = vals[gdback]
         medback = np.nanmedian(vals)
-        sigback = utils.mad(vals)
+        sigback = dln.mad(vals)
         if np.abs(medback-lastmedback) < 0.01*lastmedback and \
            np.abs(sigback-lastsigback) < 0.01*lastsigback:
             done = True
@@ -163,25 +283,25 @@ def findtrace(im,nbin=50,minsigheight=3,minheight=None,hratio2=0.8,
     ny,nx = im.shape
     y,x = np.arange(ny),np.arange(nx)
     # Median filter in nbin column blocks all in one shot
-    medim1 = utils.rebin(im,binsize=[1,nbin],med=True)
-    xmed1 = utils.rebin(x,binsize=nbin,med=True)
+    medim1 = dln.rebin(im,binsize=[1,nbin],med=True)
+    xmed1 = dln.rebin(x,binsize=nbin,med=True)
     # half-steps
-    medim2 = utils.rebin(im[:,nbin//2:],binsize=[1,nbin],med=True)
-    xmed2 = utils.rebin(x[nbin//2:],binsize=nbin,med=True)
+    medim2 = dln.rebin(im[:,nbin//2:],binsize=[1,nbin],med=True)
+    xmed2 = dln.rebin(x[nbin//2:],binsize=nbin,med=True)
     # Splice them together
-    medim = utils.splice(medim1,medim2,axis=1)
-    xmed = utils.splice(xmed1,xmed2,axis=0)
+    medim = dln.splice(medim1,medim2,axis=1)
+    xmed = dln.splice(xmed1,xmed2,axis=0)
     nxb = medim.shape[1]
     
     # Compare flux values to neighboring spatial pixels
     #  and two pixels away
     # Shift and mask wrapped values with NaN
-    rollyp2 = utils.roll(medim,2,axis=0)
-    rollyp1 = utils.roll(medim,1,axis=0)
-    rollyn1 = utils.roll(medim,-1,axis=0)
-    rollyn2 = utils.roll(medim,-2,axis=0)
-    rollxp1 = utils.roll(medim,1,axis=1)
-    rollxn1 = utils.roll(medim,-1,axis=1)
+    rollyp2 = dln.roll(medim,2,axis=0)
+    rollyp1 = dln.roll(medim,1,axis=0)
+    rollyn1 = dln.roll(medim,-1,axis=0)
+    rollyn2 = dln.roll(medim,-2,axis=0)
+    rollxp1 = dln.roll(medim,1,axis=1)
+    rollxn1 = dln.roll(medim,-1,axis=1)
     if minheight is not None:
         height_thresh = minheight
     else:
@@ -195,7 +315,7 @@ def findtrace(im,nbin=50,minsigheight=3,minheight=None,hratio2=0.8,
               (np.abs(medim[peaks]-rollxn1[peaks])/medim[peaks] < neifluxratio))
     ind = np.where(peaks.ravel())[0][peaksht]
     ypind,xpind = np.unravel_index(ind,peaks.shape)
-    xindex = utils.create_index(xpind)
+    xindex = dln.create_index(xpind)
     
     # Boolean mask image for the trace peak pixels
     pmask = np.zeros(medim.shape,bool)
@@ -217,7 +337,7 @@ def findtrace(im,nbin=50,minsigheight=3,minheight=None,hratio2=0.8,
         pmask = (medim*pmask > height_thresh)
         ypind,xpind = np.where(pmask)
         # Create the X-values index
-        xindex = utils.create_index(xpind)
+        xindex = dln.create_index(xpind)
     
     # Now match up the traces across column blocks
     # Loop over the column blocks and either connect a peak
@@ -276,7 +396,7 @@ def findtrace(im,nbin=50,minsigheight=3,minheight=None,hratio2=0.8,
         # Remove the ones that matched
         yleft = yind.copy()
         if len(tymatches)>0:
-            ind1,ind2 = utils.match(yind,tymatches)
+            ind1,ind2 = dln.match(yind,tymatches)
             nmatch = len(ind1)
             if nmatch>0 and nmatch<len(yind):
                 yleft = np.delete(yleft,ind1)
@@ -369,7 +489,7 @@ def trace(im,yestimate=None,yorder=2,sigorder=2,step=50):
     if yestimate is None:
         ymed = np.nanmedian(im,axis=1)
         #yestimate = np.argmax(ytot)
-        sig = utils.mad(ymed)
+        sig = dln.mad(ymed)
         ypeaks, = argrelextrema(ymed, np.greater)
         gd, = np.where(ymed[ypeaks] > (np.nanmedian(ymed)+5*sig))
         ypeaks = ypeaks[gd]
@@ -400,7 +520,7 @@ def trace(im,yestimate=None,yorder=2,sigorder=2,step=50):
                 bounds[0][1] = yestimate-15
                 bounds[1][1] = yestimate+15                
                 bounds[0][2] = 0.1
-                pars,cov = utils.gaussfit(y[yestimate-15:yestimate+15],im[yestimate-15:yestimate+15,step*i+step//2],
+                pars,cov = dln.gaussfit(y[yestimate-15:yestimate+15],im[yestimate-15:yestimate+15,step*i+step//2],
                                           initpar=estimate,bounds=bounds,binned=True)
                 tcat['x'][i] = step*i+step//2
                 tcat['pars'][i] = pars
@@ -468,8 +588,8 @@ def linefit(x,y,initpar,bounds,err=None,binned=False):
     #line_bounds = ([lbounds[0],lbounds[3]],[ubounds[0],ubounds[3]])
     #return curve_fit(gline, x, y, p0=line_initpar, bounds=line_bounds, sigma=err)
 
-    func = utils.gaussian
-    if binned is True: func=utils.gaussbin
+    func = dln.gaussian
+    if binned is True: func=dln.gaussbin
     line_initpar = [initpar[0],initpar[3]]
     line_bounds = ([lbounds[0],lbounds[3]],[ubounds[0],ubounds[3]])
     return curve_fit(func, x, y, p0=line_initpar, sigma=sigma, bounds=line_bounds)
@@ -538,9 +658,9 @@ def extract(im,imerr=None,mcat=None,fixtrace=False,fixsigma=False,nobackground=F
             bnds[1][3] = initpars[3]+1e-7
             #bnds = ([0,ycen-1e-7,ysigma-1e-7,0],[1.5*ht0,ycen+1e-7,ysigma+1e-7,0.1])
 
-        #func = utils.gaussian
-        #if binned is True: func=utils.gaussbin
-        func = utils.gaussbin
+        #func = dln.gaussian
+        #if binned is True: func=dln.gaussbin
+        func = dln.gaussbin
         try:
             pars,cov = curve_fit(func,y1,line1,p0=initpars,bounds=bnds,sigma=err1)
             # reject outlier points and refit
@@ -610,8 +730,8 @@ def extract_optimal(im,ytrace,imerr=None,verbose=False,off=10,backoff=50,smlen=3
     psf1 = np.maximum(sim,0)/tot
     psf = np.zeros(psf1.shape,float)
     for i in range(nback):
-        psf[i,:] = utils.medfilt(psf1[i,:],smlen)
-        #psf[i,:] = utils.gsmooth(psf1[i,:],smlen)        
+        psf[i,:] = dln.medfilt(psf1[i,:],smlen)
+        #psf[i,:] = dln.gsmooth(psf1[i,:],smlen)        
     psf[(psf<0) | ~np.isfinite(psf)] = 0
     totpsf = np.sum(psf,axis=0)
     totpsf[(totpsf<=0) | (~np.isfinite(totpsf))] = 1
@@ -677,9 +797,9 @@ def emissionlines(spec,thresh=None):
         xhi = np.minimum(x0+6,nx)
         initpar = [spec[x0],x0,1,0]
         bnds = ([0,x0-3,0.1,0],[1.5*initpar[0],x0+3,10,1e4])
-        pars,cov = utils.gaussfit(x[xlo:xhi],spec[xlo:xhi],initpar,bounds=bnds,binned=True)
+        pars,cov = dln.gaussfit(x[xlo:xhi],spec[xlo:xhi],initpar,bounds=bnds,binned=True)
         perr = np.sqrt(np.diag(cov))
-        gmodel1 = utils.gaussian(x[xlo:xhi],*pars)
+        gmodel1 = dln.gaussian(x[xlo:xhi],*pars)
         gmodel[xlo:xhi] += (gmodel1-pars[3])
         resid[xlo:xhi] -= (gmodel1-pars[3])
         # Gaussian area = ht*wid*sqrt(2*pi)
